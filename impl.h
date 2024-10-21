@@ -53,7 +53,6 @@ struct CSAOutput perform_csa(u64 a, u64 b, u64 c) {
 // contains the current high 31 bits of the acc. this is shifted by 2 after each CSA.
 u64 acc_shift_register = 0;
 
-// auxiliary_carries is the carryouts from the booths recoding
 struct CSAOutput perform_csa_array(u64 partial_sum, u64 partial_carry, struct RecodedMultiplicands addends) {
     struct CSAOutput csa_output = { partial_sum, partial_carry };
     struct CSAOutput final_csa_output = { 0, 0 };
