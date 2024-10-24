@@ -2,10 +2,12 @@
 #define PC_BUILD 1
 #include "impl.h"
 #undef printf
+#include "impl_opt.h"
 
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 // generate interesting random numbers
 unsigned int get_rand_32() {
@@ -17,8 +19,8 @@ unsigned int get_rand_32() {
         case 3: return 0xFFFFFFFF - (rand() & 0xFF);
         case 4: return 0xFFFFFFFF - (rand() & 0xFFFF);
         case 5: return 0xFFFFFFFF - (rand() & 0xFFFFFF);
-        case 6: return 0xAAAAAAAA & (rand() & 0xFFFF) | ((rand() & 0xFFFF) << 16);
-        case 7: return 0x55555555 & (rand() & 0xFFFF) | ((rand() & 0xFFFF) << 16);
+        case 6: return (0xAAAAAAAA & (rand() & 0xFFFF)) | ((rand() & 0xFFFF) << 16);
+        case 7: return (0x55555555 & (rand() & 0xFFFF)) | ((rand() & 0xFFFF) << 16);
         case 8: return 0;
         case 9: return ((rand() & 0xFFFF) | ((rand() & 0xFFFF) << 16));
 
@@ -69,10 +71,10 @@ int main() {
         unsigned int actual = guess_mul_zero(multiplier);
 
         if (guess != actual) {
-            printf("[MUL CARRY REGRESSION] Failed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+            printf("[MUL CARRY REGRESSION] Failed: %x * %x = %x, got %x\n", multiplicand, multiplier, actual, guess);
             return 1;
         } else {
-            printf("[MUL CARRY REGRESSION] Passed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+            printf("[MUL CARRY REGRESSION] Passed: %x * %x = %x, got %x\n", multiplicand, multiplier, actual, guess);
         }
     }
 
@@ -81,14 +83,14 @@ int main() {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
 
-        unsigned int guess = mul(multiplicand, multiplier).output;
-        unsigned int actual = (unsigned int) multiplicand * (unsigned int) multiplier;
+        struct MultiplicationOutput guess = mul_opt(multiplicand, multiplier);
+        struct MultiplicationOutput actual = mul(multiplicand, multiplier);
 
-        if (guess != actual) {
-            printf("[MUL REGRESSION] Failed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[MUL REGRESSION] Failed: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[MUL REGRESSION] Passed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+            printf("[MUL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
@@ -98,12 +100,14 @@ int main() {
         unsigned int multiplier = get_rand_32();
         unsigned int accumulate = get_rand_32();
 
-        unsigned int guess = mla(multiplicand, multiplier, accumulate).output;
-        unsigned int actual = (unsigned int) multiplicand * (unsigned int) multiplier + (unsigned int) accumulate;
+        struct MultiplicationOutput guess = mla_opt(multiplicand, multiplier, accumulate);
+        struct MultiplicationOutput actual = mla(multiplicand, multiplier, accumulate);
 
-        if (guess != actual) {
-            printf("[MLA REGRESSION] Failed: %llx * %llx + %llx = %llx, got %llx\n", multiplicand, multiplier, accumulate, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[MLA REGRESSION] Failed: %x * %x + %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, accumulate, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
+        } else {
+            printf("[MLA REGRESSION] Passed: %x * %x + %x = %"PRIx64":%x\n", multiplicand, multiplier, accumulate, actual.output, actual.carry);
         }
     }
 
@@ -111,16 +115,15 @@ int main() {
     for (int i = 0; i < 10000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
-        unsigned int accumulate = get_rand_32();
 
-        unsigned long long guess = umull(multiplicand, multiplier).output;
-        unsigned long long actual = (unsigned long long) multiplicand * (unsigned long long) multiplier;
+        struct MultiplicationOutput guess = umull_opt(multiplicand, multiplier);
+        struct MultiplicationOutput actual = umull(multiplicand, multiplier);
 
-        if (guess != actual) {
-            printf("[UMULL REGRESSION] Failed #%d: %llx * %llx = %llx, got %llx\n", i, multiplicand, multiplier, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[UMULL REGRESSION] Failed #%d: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", i, multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[UMULL REGRESSION] Passed #%d: %llx * %llx = %llx, got %llx\n", i, multiplicand, multiplier, actual, guess);
+            printf("[UMULL REGRESSION] Passed #%d: %x * %x = %"PRIx64":%x", i, multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
@@ -131,16 +134,15 @@ int main() {
         unsigned int accumulate = get_rand_32();
         unsigned int accumulate2 = get_rand_32();
 
-        unsigned long long guess = umlal(accumulate, accumulate2, multiplicand, multiplier).output;
-        unsigned long long actual_acc = (unsigned long long) accumulate + ((unsigned long long) accumulate2 << 32);
-        unsigned long long actual =
-            (unsigned long long) multiplicand * (unsigned long long) multiplier + actual_acc;
+        struct MultiplicationOutput guess = umlal_opt(accumulate, accumulate2, multiplicand, multiplier);
+        struct MultiplicationOutput actual = umlal(accumulate, accumulate2, multiplicand, multiplier);
+        u64 actual_acc = (u64) accumulate + ((u64) accumulate2 << 32);
 
-        if (guess != actual) {
-            printf("[UMLAL REGRESSION] Failed: %llx * %llx + %llx = %llx, got %llx\n", multiplicand, multiplier, actual_acc, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[UMLAL REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[UMLAL REGRESSION] Passed: %llx * %llx + %llx = %llx, got %llx\n", multiplicand, multiplier, actual_acc, actual, guess);
+            printf("[UMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
         }
     }
 
@@ -149,14 +151,14 @@ int main() {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
 
-        long long guess = smull(multiplicand, multiplier).output;
-        long long actual = (long long) (int) multiplicand * (long long) (int) multiplier;
+        struct MultiplicationOutput guess = smull_opt(multiplicand, multiplier);
+        struct MultiplicationOutput actual = smull(multiplicand, multiplier);
 
-        if (guess != actual) {
-            printf("[SMULL REGRESSION] Failed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[SMULL REGRESSION] Failed: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[SMULL REGRESSION] Passed: %llx * %llx = %llx, got %llx\n", multiplicand, multiplier, actual, guess);
+            printf("[SMULL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
@@ -167,17 +169,18 @@ int main() {
         unsigned int accumulate = get_rand_32();
         unsigned int accumulate2 = get_rand_32();
 
-        long long guess = smlal(accumulate, accumulate2, multiplicand, multiplier).output;
-        long long actual_acc = (long long) accumulate + ((long long) accumulate2 << 32);
-        long long actual = (long long) (int) multiplicand * (long long) (int) multiplier + actual_acc;
+        struct MultiplicationOutput guess = smlal_opt(accumulate, accumulate2, multiplicand, multiplier);
+        struct MultiplicationOutput actual = smlal(accumulate, accumulate2, multiplicand, multiplier);
+        u64 actual_acc = (u64) accumulate + ((u64) accumulate2 << 32);
 
-        if (guess != actual) {
-            printf("[SMLAL REGRESSION] Failed: %llx * %llx + %llx = %llx, got %llx\n", multiplicand, multiplier, actual_acc, actual, guess);
+        if (guess.output != actual.output || guess.carry != actual.carry) {
+            printf("[SMLAL REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[SMLAL REGRESSION] Passed: %llx * %llx + %llx = %llx, got %llx\n", multiplicand, multiplier, actual_acc, actual, guess);
+            printf("[SMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
         }
     }
 
     printf("All tests passed!\n");
+    return 0;
 }
