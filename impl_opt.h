@@ -44,7 +44,7 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
     do {
         for (int i = 0; i < 4; i++, csa_mask <<= 2, booth_mask <<= 2) {
             // Get absolute value of booth addend, pre-scaled
-            u64 addend = multiplicand * (booth_chunks & booth_mask);
+            u64 addend = (u64)multiplicand * (booth_chunks & booth_mask);
             // Invert the addend if there's an injected carry
             addend ^= -(u64)(booth_signs & booth_mask);
             // Combine the addend with the CSA, within the current 33-bit mask
