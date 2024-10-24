@@ -1,3 +1,6 @@
+#ifndef BITWISE_H
+#define BITWISE_H
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -7,6 +10,7 @@ typedef uint16_t    u16;
 typedef uint8_t     u8;
 
 typedef int64_t     s64;
+typedef int32_t     s32;
 
 static inline u64 mask(int lo, int hi) {
     u64 size = hi - lo;
@@ -28,3 +32,5 @@ static inline u64 asr(u64 value, int shift, int size) {
     sign_extended >>= shift;
     return sign_extended & mask(0, size);
 }
+
+#endif
