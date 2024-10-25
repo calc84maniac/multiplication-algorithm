@@ -2,25 +2,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static inline struct CSAOutput perform_csa_opt(struct CSAOutput prev_output, u64 addend, u64 mask) {
-    addend &= mask;
-    u64 output = prev_output.output ^ (prev_output.carry & mask) ^ addend;
-    u64 carry  = (prev_output.output + prev_output.carry + addend) - output;
-    return (struct CSAOutput) { output, carry };
-}
-
 static inline struct MultiplicationOutput booths_multiplication_opt(enum MultiplicationFlavor flavor, s64 multiplicand, s64 multiplier, u64 accumulator) {
-    struct CSAOutput csa_output;
     bool alu_carry_in = multiplier & 1;
 
     // Optimized first iteration
-    csa_output.carry = (multiplier & 1) ? (~multiplicand & UINT64_C(0x3FFFFFFFF)) : 0;
+    u64 carry = (multiplier & 1) ? (~multiplicand & UINT64_C(0x3FFFFFFFF)) : 0;
     // Pre-populate magic bits for carry
-    csa_output.carry |= ~accumulator & UINT64_C(0xAAAAAAA800000000);
+    carry |= ~accumulator & UINT64_C(0xAAAAAAA800000000);
     // Pre-populate magic bits and lower accumulator for output
-    csa_output.output = accumulator & UINT64_C(0x55555557FFFFFFFF);
+    u64 output = accumulator & UINT64_C(0x55555557FFFFFFFF);
     // Add inverted upper bits of carry into output magic bits
-    csa_output.output += (~csa_output.carry & UINT64_C(0xAAAAAAAA00000000)) << 1;
+    output += (~carry & UINT64_C(0xAAAAAAAA00000000)) << 1;
 
     // Extract signs from each booth chunk
     u32 booth_signs = (multiplier >> 2) & UINT32_C(0x55555555);
@@ -29,7 +21,7 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
     // Determine which chunks are non-zero
     u32 booth_nonzero = booth_chunks | booth_chunks >> 1;
     // Finalize output magic using the sign of each booth addend
-    csa_output.output += (~(booth_nonzero & (booth_signs ^ (multiplicand >> 63))) & UINT32_C(0x55555555)) << 34;
+    output += (~(booth_nonzero & (booth_signs ^ (multiplicand >> 63))) & UINT32_C(0x55555555)) << 34;
 
     // Determine which booth chunks inject a carry
     booth_signs &= booth_nonzero;
@@ -41,6 +33,7 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
     multiplicand <<= 1;
     u32 booth_mask = 3;
     multiplier ^= multiplier >> 63;
+    u64 sum = output + carry;
     do {
         for (int i = 0; i < 4; i++, csa_mask <<= 2, booth_mask <<= 2) {
             // Get absolute value of booth addend, pre-scaled
@@ -48,23 +41,26 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
             // Invert the addend if there's an injected carry
             addend ^= -(u64)(booth_signs & booth_mask);
             // Combine the addend with the CSA, within the current 33-bit mask
-            csa_output = perform_csa_opt(csa_output, addend, csa_mask);
+            addend &= csa_mask;
+            output ^= (carry & csa_mask) ^ addend;
+            sum += addend;
+            carry = sum - output;
         }
     } while (multiplier >>= 8);
 
     // Inject booth carries
-    csa_output.carry += booth_signs << 1;
+    carry += booth_signs << 1;
 
-    u64 product = csa_output.output + csa_output.carry + alu_carry_in;
+    u64 product = output + carry + alu_carry_in;
     if (is_long(flavor)) {
         return (struct MultiplicationOutput) {
             product,
-            bit(csa_output.carry, booth_mask ? 31 : 63)
+            bit(carry, booth_mask ? 31 : 63)
         };
     } else {
         return (struct MultiplicationOutput) { 
             (u32) product,
-            bit(csa_output.carry, 31)
+            bit(carry, 31)
         };
     }
 }
