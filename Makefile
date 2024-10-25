@@ -1,3 +1,3 @@
 all:
 	# wow what a fancy makefile
-	gcc -Wall -Wextra -Werror main.c
+	gcc -O2 -Wall -Wextra -Werror main.c

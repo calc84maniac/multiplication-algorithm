@@ -67,19 +67,19 @@ int main() {
         unsigned int multiplicand = 0;
         unsigned int multiplier = 0xFFFFFFFF - i;
 
-        unsigned int guess = mul(multiplicand, multiplier).carry;
+        unsigned int guess = mul_opt(multiplicand, multiplier).carry;
         unsigned int actual = guess_mul_zero(multiplier);
 
         if (guess != actual) {
             printf("[MUL CARRY REGRESSION] Failed: %x * %x = %x, got %x\n", multiplicand, multiplier, actual, guess);
             return 1;
         } else {
-            printf("[MUL CARRY REGRESSION] Passed: %x * %x = %x, got %x\n", multiplicand, multiplier, actual, guess);
+            //printf("[MUL CARRY REGRESSION] Passed: %x * %x = %x, got %x\n", multiplicand, multiplier, actual, guess);
         }
     }
 
     printf("Running mul regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
 
@@ -90,12 +90,12 @@ int main() {
             printf("[MUL REGRESSION] Failed: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[MUL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
+            //printf("[MUL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
     printf("Running mla regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
         unsigned int accumulate = get_rand_32();
@@ -107,12 +107,12 @@ int main() {
             printf("[MLA REGRESSION] Failed: %x * %x + %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, accumulate, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[MLA REGRESSION] Passed: %x * %x + %x = %"PRIx64":%x\n", multiplicand, multiplier, accumulate, actual.output, actual.carry);
+            //printf("[MLA REGRESSION] Passed: %x * %x + %x = %"PRIx64":%x\n", multiplicand, multiplier, accumulate, actual.output, actual.carry);
         }
     }
 
     printf("Running umull regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
 
@@ -123,12 +123,12 @@ int main() {
             printf("[UMULL REGRESSION] Failed #%d: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", i, multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[UMULL REGRESSION] Passed #%d: %x * %x = %"PRIx64":%x", i, multiplicand, multiplier, actual.output, actual.carry);
+            //printf("[UMULL REGRESSION] Passed #%d: %x * %x = %"PRIx64":%x", i, multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
     printf("Running umlal regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
         unsigned int accumulate = get_rand_32();
@@ -142,12 +142,12 @@ int main() {
             printf("[UMLAL REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[UMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
+            //printf("[UMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
         }
     }
 
     printf("Running smull regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
 
@@ -158,12 +158,12 @@ int main() {
             printf("[SMULL REGRESSION] Failed: %x * %x = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[SMULL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
+            //printf("[SMULL REGRESSION] Passed: %x * %x = %"PRIx64":%x\n", multiplicand, multiplier, actual.output, actual.carry);
         }
     }
 
     printf("Running smlal regression tests...\n");
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
         unsigned int multiplier = get_rand_32();
         unsigned int accumulate = get_rand_32();
@@ -177,7 +177,7 @@ int main() {
             printf("[SMLAL REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
             return 1;
         } else {
-            printf("[SMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
+            //printf("[SMLAL REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
         }
     }
 
