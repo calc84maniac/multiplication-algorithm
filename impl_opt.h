@@ -2,6 +2,102 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef CARRY_ONLY
+#define CARRY_ONLY 1
+#endif
+
+static inline bool booths_multiplication32_opt(u32 multiplicand, s32 multiplier, u32 accumulator) {
+    // Optimized first iteration
+    u32 carry = -(multiplier & 1) & ~multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+
+    // Extract signs from each booth chunk
+    u32 booth_signs = (multiplier >> 2) & UINT32_C(0x55555555);
+    // Take the absolute value of each chunk
+    u32 booth_chunks = multiplier ^ (booth_signs * 3);
+    // Determine which chunks are non-zero
+    u32 booth_nonzero = booth_chunks | booth_chunks >> 1;
+
+    // Determine which booth chunks inject a carry
+    booth_signs &= booth_nonzero;
+    // Translate chunk absolute values into direct factors of 0, 1, 2
+    booth_chunks -= (booth_chunks >> 1) & UINT32_C(0x55555555);
+
+    // Start at bit 1 to account for the optimized first iteration
+    multiplicand <<= 1;
+    u32 booth_mask = 3;
+    multiplier ^= multiplier >> 31;
+    u32 sum = output + carry;
+    do {
+        for (int i = 0; i < 4; i++, booth_mask <<= 2) {
+            // Get absolute value of booth addend, pre-scaled
+            u32 addend = multiplicand * (booth_chunks & booth_mask);
+            // Invert the addend if there's an injected carry
+            addend ^= -(booth_signs & booth_mask);
+            // Combine the addend with the CSA
+            // Removing the mask seems to work because the lower carries can't propagate to bit 31
+            output ^= carry ^ addend;
+            sum += addend;
+            carry = sum - output;
+        }
+    } while (multiplier >>= 8);
+
+    return carry >> 31;
+}
+
+// Takes a multiplicand shifted right by 5 and a multiplier shifted right by 26 (zero or sign extended)
+static inline bool booths_multiplication64_opt(s32 multiplicand, s32 multiplier, u32 accum_hi) {
+    // Skipping the first 14 iterations seems to work because the lower carries can't propagate to bit 63
+    // This means only the upper 4 magic bits are needed (which requires decoding 3 booth chunks),
+    // and only the last two booth iterations are needed
+
+    // Pre-populate magic bits for carry
+    u32 carry = ~accum_hi & UINT32_C(0xA0000000);
+    // Pre-populate magic bits for output
+    u32 output = accum_hi & UINT32_C(0x50000000);
+    // Add inverted upper bits of carry into output magic bits
+    output += (accum_hi << 1) & UINT32_C(0x50000000);
+
+    // Extract signs from each booth chunk
+    u32 booth_signs = (multiplier >> 2) & 0x15;
+    // Take the absolute value of each chunk
+    u32 booth_chunks = multiplier ^ (booth_signs * 3);
+    // Determine which chunks are non-zero
+    u32 booth_nonzero = booth_chunks | booth_chunks >> 1;
+    // Finalize output magic using the sign of each booth addend
+    output += (~(booth_nonzero & (booth_signs ^ (multiplicand >> 31))) & 0x5) << 28;
+
+    // Determine which booth chunks inject a carry
+    booth_signs &= booth_nonzero;
+    // Translate chunk absolute values into direct factors of 0, 1, 2
+    booth_chunks -= (booth_chunks >> 1) & 0x15;
+
+    u32 csa_mask = UINT32_C(0x3FFFFFFF);
+    u32 sum = output + carry;
+
+    // Get absolute value of booth addend, pre-scaled
+    u32 addend = (u32)multiplicand * (booth_chunks & (3 << 2));
+    // Invert the addend if there's an injected carry
+    addend ^= -(booth_signs & (1 << 2));
+    // Combine the addend with the CSA, within the current mask
+    addend &= csa_mask;
+    output ^= (carry & csa_mask) ^ addend;
+    sum += addend;
+    carry = sum - output;
+
+    // Get absolute value of booth addend, pre-scaled
+    addend = (u32)multiplicand * (booth_chunks & (3 << 4));
+    // Invert the addend if there's an injected carry
+    addend ^= -(booth_signs & (1 << 4));
+    // Combine the addend with the CSA, the current mask covers all 32 bits
+    output ^= carry ^ addend;
+    sum += addend;
+    carry = sum - output;
+
+    return carry >> 31;
+}
+
 static inline struct MultiplicationOutput booths_multiplication_opt(enum MultiplicationFlavor flavor, s64 multiplicand, s64 multiplier, u64 accumulator) {
     bool alu_carry_in = multiplier & 1;
 
@@ -65,26 +161,60 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
     }
 }
 
-struct MultiplicationOutput mul_opt(s32 rm, s32 rs) {
-    return booths_multiplication_opt(SHORT, rm, rs, 0);
-}
-
 struct MultiplicationOutput mla_opt(s32 rm, s32 rs, u32 rn) {
+#if CARRY_ONLY
+    u32 product = (u32) rm * (u32) rs + rn;
+    bool carry;
+    if (rs < -0x01000000 || rs >= 0x01000000) {
+        carry = (rs >> 30) == -2;
+    } else {
+    	carry = booths_multiplication32_opt(rm, rs, rn);
+    }
+    return (struct MultiplicationOutput) { product, carry };
+#else
     return booths_multiplication_opt(SHORT, rm, rs, rn);
+#endif
 }
 
-struct MultiplicationOutput umull_opt(u32 rm, u32 rs) {
-    return booths_multiplication_opt(LONG_UNSIGNED, rm, rs, 0);
+struct MultiplicationOutput mul_opt(s32 rm, s32 rs) {
+    return mla_opt(rm, rs, 0);
 }
 
 struct MultiplicationOutput umlal_opt(u32 rdlo, u32 rdhi, u32 rm, u32 rs) {
-    return booths_multiplication_opt(LONG_UNSIGNED, rm, rs, ((u64) rdhi << 32) | (u64) rdlo);
+#if CARRY_ONLY
+    u64 product = (u64) rm * (u64) rs + ((u64) rdhi << 32 | rdlo);
+    bool carry;
+    if (rs >= 0x01000000) {
+        carry = booths_multiplication64_opt(rm >> 5, rs >> 26, rdhi);
+    } else {
+    	carry = booths_multiplication32_opt(rm, rs, rdlo);
+    }
+    return (struct MultiplicationOutput) { product, carry };
+#else
+    return booths_multiplication_opt(LONG_UNSIGNED, rm, rs, ((u64) rdhi << 32) | rdlo);
+#endif
 }
 
-struct MultiplicationOutput smull_opt(s32 rm, s32 rs) {
-    return booths_multiplication_opt(LONG_SIGNED, rm, rs, 0);
+struct MultiplicationOutput umull_opt(u32 rm, u32 rs) {
+    return umlal_opt(0, 0, rm, rs);
 }
 
 struct MultiplicationOutput smlal_opt(u32 rdlo, u32 rdhi, s32 rm, s32 rs) {
-    return booths_multiplication_opt(LONG_SIGNED, rm, rs, (u64) rdhi << 32 | (u64) rdlo);
+#if CARRY_ONLY
+    u64 product = (u64) rm * (u64) rs + ((u64) rdhi << 32 | rdlo);
+    bool carry;
+    if (rs < -0x01000000 || rs >= 0x01000000) {
+        carry = booths_multiplication64_opt(rm >> 5, rs >> 26, rdhi);
+    } else {
+    	carry = booths_multiplication32_opt(rm, rs, rdlo);
+    }
+    return (struct MultiplicationOutput) { product, carry };
+#else
+    return booths_multiplication_opt(LONG_SIGNED, rm, rs, (u64) rdhi << 32 | rdlo);
+#endif
 }
+
+struct MultiplicationOutput smull_opt(s32 rm, s32 rs) {
+    return smlal_opt(0, 0, rm, rs);
+}
+
