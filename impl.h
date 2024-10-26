@@ -141,8 +141,8 @@ struct AdderOutput {
 
 struct AdderOutput adder(u32 a, u32 b, bool carry) {
     u32 output = a + b + carry;
-    bool overflow = output < a || output < b;
-    return (struct AdderOutput) { output, overflow };
+    u64 real_output = (u64) a + (u64) b + (u64) carry;
+    return (struct AdderOutput) { output, output != real_output };
 }
 
 struct MultiplicationOutput {
