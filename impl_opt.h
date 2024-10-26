@@ -6,42 +6,33 @@
 #define CARRY_ONLY 1
 #endif
 
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF
 static inline bool booths_multiplication32_opt(u32 multiplicand, s32 multiplier, u32 accumulator) {
     // Optimized first iteration
     u32 carry = -(multiplier & 1) & ~multiplicand;
     // Pre-populate accumulator for output
     u32 output = accumulator;
 
-    // Extract signs from each booth chunk
-    u32 booth_signs = (multiplier >> 2) & UINT32_C(0x55555555);
-    // Take the absolute value of each chunk
-    u32 booth_chunks = multiplier ^ (booth_signs * 3);
-    // Determine which chunks are non-zero
-    u32 booth_nonzero = booth_chunks | booth_chunks >> 1;
-
-    // Determine which booth chunks inject a carry
-    booth_signs &= booth_nonzero;
-    // Translate chunk absolute values into direct factors of 0, 1, 2
-    booth_chunks -= (booth_chunks >> 1) & UINT32_C(0x55555555);
-
     // Start at bit 1 to account for the optimized first iteration
-    multiplicand <<= 1;
-    u32 booth_mask = 3;
-    multiplier ^= multiplier >> 31;
+    // Also set the low bit to cause negation to invert the multiplicand bits, this bit can't propagate to bit 31
+    multiplicand = multiplicand * 2 + 1;
+    // Scale the multiplier for shift-based booth factor lookup, this can't overflow
+    multiplier <<= 2;
     u32 sum = output + carry;
     do {
-        for (int i = 0; i < 4; i++, booth_mask <<= 2) {
-            // Get absolute value of booth addend, pre-scaled
-            u32 addend = multiplicand * (booth_chunks & booth_mask);
-            // Invert the addend if there's an injected carry
-            addend ^= -(booth_signs & booth_mask);
+        for (int i = 0; i < 4; i++, multiplier >>= 2, multiplicand <<= 2) {
+            // Get booth factor (-2 to 2)
+            s32 factor = (INT32_C(0x0112EFF0) << (multiplier & 0x1C)) >> 28;
+            // Get scaled value of booth addend
+            u32 addend = multiplicand * factor;
             // Combine the addend with the CSA
-            // Removing the mask seems to work because the lower carries can't propagate to bit 31
+            // Not performing any masking seems to work because the lower carries can't propagate to bit 31
             output ^= carry ^ addend;
             sum += addend;
             carry = sum - output;
         }
-    } while (multiplier >>= 8);
+    // Account for multiplier scaling when checking for early-out condition
+    } while (multiplier < -4 || multiplier >= 4);
 
     return carry >> 31;
 }
@@ -168,7 +159,7 @@ struct MultiplicationOutput mla_opt(s32 rm, s32 rs, u32 rn) {
     if (rs < -0x01000000 || rs >= 0x01000000) {
         carry = (rs >> 30) == -2;
     } else {
-    	carry = booths_multiplication32_opt(rm, rs, rn);
+        carry = booths_multiplication32_opt(rm, rs, rn);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
@@ -187,7 +178,7 @@ struct MultiplicationOutput umlal_opt(u32 rdlo, u32 rdhi, u32 rm, u32 rs) {
     if (rs >= 0x01000000) {
         carry = booths_multiplication64_opt(rm >> 5, rs >> 26, rdhi);
     } else {
-    	carry = booths_multiplication32_opt(rm, rs, rdlo);
+        carry = booths_multiplication32_opt(rm, rs, rdlo);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
@@ -206,7 +197,7 @@ struct MultiplicationOutput smlal_opt(u32 rdlo, u32 rdhi, s32 rm, s32 rs) {
     if (rs < -0x01000000 || rs >= 0x01000000) {
         carry = booths_multiplication64_opt(rm >> 5, rs >> 26, rdhi);
     } else {
-    	carry = booths_multiplication32_opt(rm, rs, rdlo);
+        carry = booths_multiplication32_opt(rm, rs, rdlo);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
