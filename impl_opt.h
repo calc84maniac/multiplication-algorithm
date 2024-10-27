@@ -7,22 +7,24 @@
 #endif
 
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, s32 multiplier, u32 accumulator) {
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+    // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
+    multiplicand |= 1;
+
     // Optimized first iteration
-    u32 carry = -(multiplier & 1) & ~multiplicand;
+    u32 booth = (s32)(multiplier << 31) >> 31;
+    u32 carry = booth * multiplicand;
     // Pre-populate accumulator for output
     u32 output = accumulator;
 
-    // Start at bit 1 to account for the optimized first iteration
-    // Also set the low bit to cause negation to invert the multiplicand bits, this bit can't propagate to bit 31
-    multiplicand = multiplicand * 2 + 1;
-    // Scale the multiplier for shift-based booth factor lookup, this can't overflow
-    multiplier <<= 2;
     u32 sum = output + carry;
+    int shift = 29;
     do {
-        for (int i = 0; i < 4; i++, multiplier >>= 2, multiplicand <<= 2) {
-            // Get booth factor (-2 to 2)
-            s32 factor = (INT32_C(0x0112EFF0) << (multiplier & 0x1C)) >> 28;
+        for (int i = 0; i < 4; i++, shift -= 2) {
+            // Get next booth factor (-2 to 2, shifted left by 30-shift)
+            u32 next_booth = (s32)(multiplier << shift) >> shift;
+            u32 factor = next_booth - booth;
+            booth = next_booth;
             // Get scaled value of booth addend
             u32 addend = multiplicand * factor;
             // Combine the addend with the CSA
@@ -31,8 +33,7 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, s32 multiplier,
             sum += addend;
             carry = sum - output;
         }
-    // Account for multiplier scaling when checking for early-out condition
-    } while (multiplier < -4 || multiplier >= 4);
+    } while (booth != multiplier);
 
     return carry >> 31;
 }
@@ -46,9 +47,7 @@ static inline bool booths_multiplication64_opt(s32 multiplicand, s32 multiplier,
     // Pre-populate magic bits for carry
     u32 carry = ~accum_hi & UINT32_C(0xA0000000);
     // Pre-populate magic bits for output
-    u32 output = accum_hi & UINT32_C(0x50000000);
-    // Add inverted upper bits of carry into output magic bits
-    output += (accum_hi << 1) & UINT32_C(0x50000000);
+    u32 output = accum_hi + (accum_hi & UINT32_C(0xA8000000));
 
     // Extract signs from each booth chunk
     u32 booth_signs = (multiplier >> 2) & 0x15;
