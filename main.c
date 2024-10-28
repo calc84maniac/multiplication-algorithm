@@ -78,6 +78,52 @@ int main() {
         }
     }
 
+    printf("Running umlal carry regression tests...\n");
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 64; j++) {
+            for (int k = 0; k < 32; k++) {
+                unsigned int multiplicand = (i << 30) | ((rand() & 0x3FFF) << 16) | (rand() & 0xFFFF);
+                unsigned int multiplier = (j << 26) | ((rand() & 0x03FF) << 16) | (rand() & 0xFFFF);
+                unsigned int accumulate = ((rand() & 0xFFFF) << 16) | (rand() & 0xFFFF);
+                unsigned int accumulate2 = (k << 27) | ((rand() & 0x07FF) << 16) | (rand() & 0xFFFF);
+
+                struct MultiplicationOutput guess = umlal_opt(accumulate, accumulate2, multiplicand, multiplier);
+                struct MultiplicationOutput actual = umlal(accumulate, accumulate2, multiplicand, multiplier);
+                u64 actual_acc = (u64) accumulate + ((u64) accumulate2 << 32);
+
+                if (guess.output != actual.output || guess.carry != actual.carry) {
+                    printf("[UMLAL CARRY REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
+                    return 1;
+                } else {
+                    //printf("[UMLAL CARRY REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
+                }
+            }
+        }
+    }
+
+    printf("Running smlal carry regression tests...\n");
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 64; j++) {
+            for (int k = 0; k < 32; k++) {
+                unsigned int multiplicand = (i << 30) | ((rand() & 0x3FFF) << 16) | (rand() & 0xFFFF);
+                unsigned int multiplier = (j << 26) | ((rand() & 0x03FF) << 16) | (rand() & 0xFFFF);
+                unsigned int accumulate = ((rand() & 0xFFFF) << 16) | (rand() & 0xFFFF);
+                unsigned int accumulate2 = (k << 27) | ((rand() & 0x07FF) << 16) | (rand() & 0xFFFF);
+
+                struct MultiplicationOutput guess = smlal_opt(accumulate, accumulate2, multiplicand, multiplier);
+                struct MultiplicationOutput actual = smlal(accumulate, accumulate2, multiplicand, multiplier);
+                u64 actual_acc = (u64) accumulate + ((u64) accumulate2 << 32);
+
+                if (guess.output != actual.output || guess.carry != actual.carry) {
+                    printf("[SMLAL CARRY REGRESSION] Failed: %x * %x + %"PRIx64" = %"PRIx64":%x, got %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry, guess.output, guess.carry);
+                    return 1;
+                } else {
+                    //printf("[SMLAL CARRY REGRESSION] Passed: %x * %x + %"PRIx64" = %"PRIx64":%x\n", multiplicand, multiplier, actual_acc, actual.output, actual.carry);
+                }
+            }
+        }
+    }
+
     printf("Running mul regression tests...\n");
     for (int i = 0; i < 10000000; i++) {
         unsigned int multiplicand = get_rand_32();
