@@ -41,16 +41,16 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 // Takes a multiplicand shifted right by 6 and a multiplier shifted right by 26 (zero or sign extended)
 static inline bool booths_multiplication64_opt(u32 multiplicand, u32 multiplier, u32 accum_hi) {
     // Skipping the first 14 iterations seems to work because the lower carries can't propagate to bit 63
-    // This means only the upper 4 magic bits are needed (which requires decoding 3 booth chunks),
+    // This means only magic bits 62-61 are needed (which requires decoding 3 booth chunks),
     // and only the last two booth iterations are needed
 
     // Set the low bit of the multiplicand to cause negation to invert the upper bits
     multiplicand |= 1;
 
-    // Pre-populate magic bits for carry
-    u32 carry = ~accum_hi & UINT32_C(0xA0000000);
-    // Pre-populate magic bits for output
-    u32 output = accum_hi + (accum_hi & UINT32_C(0xA8000000));
+    // Pre-populate magic bit 61 for carry
+    u32 carry = ~accum_hi & UINT32_C(0x20000000);
+    // Pre-populate magic bits 63-60 for output
+    u32 output = accum_hi + (accum_hi & UINT32_C(0x28000000));
 
     // Get factors from the top 3 booth chunks
     u32 booth0 = (s32)(multiplier << 27) >> 27;
@@ -69,23 +69,16 @@ static inline bool booths_multiplication64_opt(u32 multiplicand, u32 multiplier,
     // Finalize bits 63-62 of output magic using its sign
     output += ~addend & UINT32_C(0x40000000);
 
-    u32 csa_mask = UINT32_C(0x3FFFFFFF);
-    u32 sum = output + carry;
-
-    // Combine the addend with the CSA, within the current mask
-    addend &= csa_mask;
-    output ^= (carry & csa_mask) ^ addend;
-    sum += addend;
-    carry = sum - output;
+    // Get the carry from the CSA in bit 61 and propagate it to bit 62, which is not processed in this iteration
+    u32 sum = output + carry + (addend & UINT32_C(0x20000000));
 
     // Get scaled value of the 1st top booth addend
     addend = multiplicand * factor0;
-    // Combine the addend with the CSA, the current mask covers all 32 bits
-    output ^= carry ^ addend;
-    sum += addend;
-    carry = sum - output;
+    // Add to bit 62 and propagate the carry
+    sum += addend & UINT32_C(0x40000000);
 
-    return carry >> 31;
+    // Cancel out the output magic bit 63 to get the carry bit 63
+    return (sum ^ output) >> 31;
 }
 
 static inline struct MultiplicationOutput booths_multiplication_opt(enum MultiplicationFlavor flavor, s64 multiplicand, s64 multiplier, u64 accumulator) {
