@@ -49,8 +49,8 @@ static inline bool booths_multiplication64_opt(u32 multiplicand, u32 multiplier,
 
     // Pre-populate magic bit 61 for carry
     u32 carry = ~accum_hi & UINT32_C(0x20000000);
-    // Pre-populate magic bits 63-60 for output
-    u32 output = accum_hi + (accum_hi & UINT32_C(0x28000000));
+    // Pre-populate magic bits 63-60 for output (with carry magic pre-added in)
+    u32 output = accum_hi - UINT32_C(0x08000000);
 
     // Get factors from the top 3 booth chunks
     u32 booth0 = (s32)(multiplier << 27) >> 27;
@@ -63,14 +63,16 @@ static inline bool booths_multiplication64_opt(u32 multiplicand, u32 multiplier,
     // Get scaled value of the 3rd top booth addend
     u32 addend = multiplicand * factor2;
     // Finalize bits 61-60 of output magic using its sign
-    output += ~addend & UINT32_C(0x10000000);
+    output -= addend & UINT32_C(0x10000000);
     // Get scaled value of the 2nd top booth addend
     addend = multiplicand * factor1;
     // Finalize bits 63-62 of output magic using its sign
-    output += ~addend & UINT32_C(0x40000000);
+    output -= addend & UINT32_C(0x40000000);
 
     // Get the carry from the CSA in bit 61 and propagate it to bit 62, which is not processed in this iteration
-    u32 sum = output + carry + (addend & UINT32_C(0x20000000));
+    u32 sum = output + (addend & UINT32_C(0x20000000));
+    // Subtract out the carry magic to get the actual output magic
+    output -= carry;
 
     // Get scaled value of the 1st top booth addend
     addend = multiplicand * factor0;
