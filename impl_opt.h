@@ -6,6 +6,55 @@
 #define CARRY_ONLY 1
 #endif
 
+#ifndef CARRY_DIRECT
+#define CARRY_DIRECT 1
+#endif
+
+#if CARRY_DIRECT
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+    // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
+    multiplicand |= 1;
+
+    // Optimized first iteration
+    u32 booth = (s32)(multiplier << 31) >> 31;
+    u32 carry = booth * multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+
+    // Determine number of iterations and bit to start at
+    u32 csa_mask = UINT32_C(0x80000000);
+    u32 temp = multiplier ^ ((s32)multiplier >> 31);
+    do {
+        csa_mask >>= 4;
+        temp >>= 8;
+    } while (temp != 0);
+
+    // Add the bits relevant to carry bit 31
+    output = (output & -csa_mask) + (carry & -csa_mask);
+    carry &= csa_mask;
+    int shift = 29;
+    do {
+        // Let the compiler unroll
+        for (int i = 0; i < 4; i++) {
+            // Get next booth factor (-2 to 2, shifted left by 30-shift)
+            u32 next_booth = (s32)(multiplier << shift) >> shift;
+            u32 factor = next_booth - booth;
+            booth = next_booth;
+            // Get scaled value of booth addend
+            u32 addend = multiplicand * factor;
+            // Aggregate bits from each iteration that propagate to carry bit 31
+            output += addend & -csa_mask;
+            carry += addend & csa_mask;
+            csa_mask <<= 1;
+            shift -= 2;
+        }
+    } while ((s32)csa_mask >= 0);
+    // Detect carry bit 31 of the final iteration
+    carry = output ^ (output - carry);
+    return carry >> 31;
+}
+#else
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF
 static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
     // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
@@ -37,6 +86,7 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 
     return carry >> 31;
 }
+#endif
 
 // Takes a multiplicand shifted right by 6 and a multiplier shifted right by 26 (zero or sign extended)
 static inline bool booths_multiplication64_opt(u32 multiplicand, u32 multiplier, u32 accum_hi) {
