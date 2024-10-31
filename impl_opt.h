@@ -51,15 +51,15 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 
     // Determine number of iterations and masks to apply to each iteration
     // Each mask is shifted left by 1 to account for the extra factor of 2
-    static const s16 csa_masks_lut[6][4] = {
-        { -(1 << 4), -(1 << 5), -(1 << 6), -(1 << 7) },
-        { -(1 << 8), -(1 << 9), -(1 << 10), -(1 << 11) },
-        { -(1 << 12), -(1 << 13), -(1 << 14), -(1 << 15) }
-    };
-    size_t csa_index = _lzcnt_u32((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
-    __m256i csa_masks = _mm256_loadu_si256((const __m256i*) csa_masks_lut[csa_index - 1]);
-    // Shift the scalar mask to the upper 16 bits and remove the factor of 2
-    u32 csa_mask = (u32) csa_masks_lut[csa_index - 1][0] << 15;
+    __m256i csa_masks = _mm256_set_epi16(
+        -(1 << 15), -(1 << 14), -(1 << 13), -(1 << 12),
+        -(1 << 11), -(1 << 10), -(1 << 9), -(1 << 8),
+        -(1 << 7), -(1 << 6), -(1 << 5), -(1 << 4),
+        -(1 << 3), -(1 << 2), -(1 << 1), -(1 << 0));
+    u32 csa_shift = _lzcnt_u32((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
+    csa_shift *= 4;
+    csa_masks = _mm256_sll_epi16(csa_masks, _mm_cvtsi32_si128(csa_shift));
+    u32 csa_mask = (UINT32_C(1) << 15) << csa_shift;
 
     // Optimized first iteration
     u32 carry = -(multiplier & 1) & ~multiplicand;
@@ -67,8 +67,8 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     u32 output = accumulator;
 
     // Add the bits relevant to carry bit 31
-    output = (output & csa_mask) + (carry & csa_mask);
-    carry &= -csa_mask;
+    output = (output & -csa_mask) + (carry & -csa_mask);
+    carry &= csa_mask;
 
     // Mask and reduce the outputs and carries
     __m256i outputs = _mm256_and_si256(addends, csa_masks);
@@ -84,7 +84,7 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     reduce2 = _mm_add_epi16(_mm_shufflelo_epi16(reduce2, _MM_SHUFFLE(3, 1, 2, 0)),
                             _mm_shufflelo_epi16(reduce2, _MM_SHUFFLE(2, 0, 3, 1)));
     // Get packed outputs and carries
-    uint32_t reduce3 = _mm_cvtsi128_si32(reduce2);
+    u32 reduce3 = _mm_cvtsi128_si32(reduce2);
     // Combine with the initial scalar outputs and carries, removing the factor of 2
     // No need to mask the low bits of the output, which don't affect carry detection
     output += reduce3 >> 1;
