@@ -1,5 +1,6 @@
 #include "bitwise.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef CARRY_ONLY
@@ -10,7 +11,89 @@
 #define CARRY_DIRECT 1
 #endif
 
+#ifndef USE_AVX2
+#define USE_AVX2 __AVX2__
+#endif
+
 #if CARRY_DIRECT
+#if USE_AVX2
+#include <immintrin.h>
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+    // Calculate all scaled booth factors (divided by 2), normalized within 16 bits
+    const __m256i factor_shuffle = _mm256_set_epi8(
+        -1,-1,-1,-1,-1,-1,-1,-1,
+         3, 2, 3, 2, 3, 2, 3, 2,
+         2, 1, 2, 1, 2, 1, 2, 1,
+         1, 0, 1, 0, 1, 0, 1, 0);
+    const __m256i factor_mask = _mm256_set1_epi64x(UINT64_C(0x00C00030000C0003));
+
+    __m256i factors = _mm256_set1_epi32(multiplier);
+    factors = _mm256_shuffle_epi8(factors, factor_shuffle);
+    factors = _mm256_sub_epi16(
+        _mm256_and_si256(factors, factor_mask),
+        _mm256_and_si256(_mm256_srli_epi16(factors, 1), factor_mask));
+
+    // Get the multiplicand (times 4) shifted relative to each booth factor
+    const __m256i multiplicand_shuffle = _mm256_set_epi8(
+        -1,-1,-1,-1,-1,-1,-1,-1,
+         1, 0, 1, 0, 1, 0, 1, 0,
+         2, 1, 2, 1, 2, 1, 2, 1,
+         3, 2, 3, 2, 3, 2, 3, 2);
+ 
+    __m256i multiplicands = _mm256_set1_epi32(multiplicand << 2);
+    multiplicands = _mm256_shuffle_epi8(multiplicands, multiplicand_shuffle);
+
+    // Calculate the 16 most significant bits of every booth addend (times 2)
+    __m256i addends = _mm256_mullo_epi16(factors, multiplicands);
+    // Subtract 1 if the factor was negative to remove the injected carries
+    addends = _mm256_add_epi16(addends, _mm256_srai_epi16(factors, 15));
+
+    // Determine number of iterations and masks to apply to each iteration
+    // Each mask is shifted left by 1 to account for the extra factor of 2
+    static const s16 csa_masks_lut[6][4] = {
+        { -(1 << 4), -(1 << 5), -(1 << 6), -(1 << 7) },
+        { -(1 << 8), -(1 << 9), -(1 << 10), -(1 << 11) },
+        { -(1 << 12), -(1 << 13), -(1 << 14), -(1 << 15) }
+    };
+    size_t csa_index = _lzcnt_u32((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
+    __m256i csa_masks = _mm256_loadu_si256((const __m256i*) csa_masks_lut[csa_index - 1]);
+    // Shift the scalar mask to the upper 16 bits and remove the factor of 2
+    u32 csa_mask = (u32) csa_masks_lut[csa_index - 1][0] << 15;
+
+    // Optimized first iteration
+    u32 carry = -(multiplier & 1) & ~multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+
+    // Add the bits relevant to carry bit 31
+    output = (output & csa_mask) + (carry & csa_mask);
+    carry &= -csa_mask;
+
+    // Mask and reduce the outputs and carries
+    __m256i outputs = _mm256_and_si256(addends, csa_masks);
+    __m256i carries = _mm256_and_si256(addends, _mm256_abs_epi16(csa_masks));
+    // Pack output into the high 64 bits and carry into the low 64 bits of each 128-bit lane
+    __m256i reduce = _mm256_hadd_epi16(carries, outputs);
+    // Combine lanes
+    __m128i reduce2 = _mm_add_epi16(_mm256_castsi256_si128(reduce), _mm256_extracti128_si256(reduce, 1));
+    // Pack output into the high 32 bits and carry into the low 32 bits
+    reduce2 = _mm_add_epi16(_mm_shuffle_epi32(reduce2, _MM_SHUFFLE(3, 1, 2, 0)),
+                            _mm_shuffle_epi32(reduce2, _MM_SHUFFLE(2, 0, 3, 1)));
+    // Pack output into the high 16 bits and carry into the low 16 bits
+    reduce2 = _mm_add_epi16(_mm_shufflelo_epi16(reduce2, _MM_SHUFFLE(3, 1, 2, 0)),
+                            _mm_shufflelo_epi16(reduce2, _MM_SHUFFLE(2, 0, 3, 1)));
+    // Get packed outputs and carries
+    uint32_t reduce3 = _mm_cvtsi128_si32(reduce2);
+    // Combine with the initial scalar outputs and carries, removing the factor of 2
+    // No need to mask the low bits of the output, which don't affect carry detection
+    output += reduce3 >> 1;
+    carry += reduce3 << 15;
+    // Detect carry bit 31 of the final iteration
+    carry = output ^ (output - carry);
+    return carry >> 31;
+}
+#else
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF
 static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
     // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
@@ -54,6 +137,7 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     carry = output ^ (output - carry);
     return carry >> 31;
 }
+#endif
 #else
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF
 static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {

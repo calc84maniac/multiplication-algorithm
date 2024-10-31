@@ -11,6 +11,7 @@ typedef uint8_t     u8;
 
 typedef int64_t     s64;
 typedef int32_t     s32;
+typedef int16_t     s16;
 
 static inline u64 mask(int lo, int hi) {
     u64 size = hi - lo;
