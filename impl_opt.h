@@ -15,8 +15,66 @@
 #define USE_AVX2 __AVX2__
 #endif
 
+#ifndef USE_SWAR
+#define USE_SWAR 0
+#endif
+
 #if CARRY_DIRECT
-#if USE_AVX2
+#if USE_SWAR
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+    // Determine number of iterations and masks to apply to each iteration
+    // Each mask is shifted left by 1 to account for the extra factor of 2
+    u32 csa_shift = __builtin_clz((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
+    csa_shift = (csa_shift - 1) * 4;
+    u64 csa_masks = UINT64_C(0x0008000400020001) << csa_shift;
+    u32 csa_mask = (UINT32_C(1) << 19) << csa_shift;
+
+    // Optimized first iteration
+    u32 carry = -(multiplier & 1) & ~multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+
+    // Add the bits relevant to carry bit 31
+    output = (output & -csa_mask) + (carry & -csa_mask);
+    carry &= csa_mask;
+
+    const u64 field_magic  = UINT64_C(0x0001000100010001);
+    const u64 booth_magic  = UINT64_C(0x00C00030000C0003);
+    const u64 buffer_magic = UINT64_C(0x0010000400010000);
+    // Rotate the multiplicand left by 16+2 bits
+    multiplicand = (multiplicand << 18) | (multiplicand >> 14);
+    u64 outputs = 0;
+    u64 carries = 0;
+    do {
+        // Repeat multiplier bits across a 64-bit value
+        u64 booths = (u16)multiplier * field_magic;
+        // Calculate 4 scaled booth factors (divided by 2), normalized within each 16 bits
+        u64 factors = (booths & booth_magic) - ((booths >> 1) & booth_magic);
+        // Multiply 16 bits of the multiplicand by the factors,
+        // and simulate a 1 bit below the multiplicand (to invert for negative factors) by adding half the factors
+        u64 addends = (s16)multiplicand * factors + ((s64)factors >> 1);
+        // Add buffer bits to block positive or negative carries between fields
+        // This works because the multiplicand bits are treated as signed,
+        // so each multiplicand can at most contribute (-0x8000*2)+1 == (0x7FFF*-2)-1 or (0x7FFF*2)+1 == (-0x8000*-2)-1
+        addends += buffer_magic;
+        // Mask and accumulate the outputs and carries
+        csa_masks <<= 4;
+        carries += addends & csa_masks;
+        outputs += addends & (field_magic + ~csa_masks);
+        // Handle the next bytes of the multiplier and the multiplicand
+        multiplier >>= 8;
+        multiplicand = (multiplicand << 8) | (multiplicand >> 24);
+    } while ((s64)csa_masks >= 0);
+
+    // Reduce the outputs and carries and combine with the initial values, removing the factor of 2
+    output += (outputs * field_magic) >> 33;
+    carry += (carries * field_magic) >> 33 & UINT32_C(0xFFFF0000);
+    // Detect carry bit 31 of the final iteration
+    carry = output ^ (output - carry);
+    return carry >> 31;
+}
+#elif USE_AVX2
 #include <immintrin.h>
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF
 static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
