@@ -25,14 +25,13 @@
 
 #if CARRY_DIRECT
 #if USE_SWAR64
-// Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
-    // Determine number of iterations and masks to apply to each iteration
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
+    // Determine masks to apply to each iteration
     // Each mask is shifted left by 1 to account for the extra factor of 2
-    u32 csa_shift = __builtin_clz((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
-    csa_shift = (csa_shift - 1) * 4;
-    u64 csa_masks = UINT64_C(0x0008000400020001) << csa_shift;
-    u32 csa_mask = (UINT32_C(1) << 19) << csa_shift;
+    u32 csa_shift = cycles * 4;
+    u64 csa_masks = UINT64_C(0x0800040002000100) >> csa_shift;
+    u32 csa_mask = (UINT32_C(1) << 27) >> csa_shift;
 
     // Optimized first iteration
     u32 carry = -(multiplier & 1) & ~multiplicand;
@@ -80,14 +79,13 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 }
 #elif USE_SWAR32
 // For now, this is a simple translation of 64-bit SWAR with carries between 32-bit halves eliminated
-// Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
-    // Determine number of iterations and masks to apply to each iteration
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
+    // Determine masks to apply to each iteration
     // Each mask is shifted left by 1 to account for the extra factor of 2
-    u32 csa_shift = __builtin_clz((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
-    csa_shift = (csa_shift - 1) * 4;
-    u32 csa_masks = UINT32_C(0x00080004) << csa_shift;
-    u32 csa_mask = (UINT32_C(1) << 19) << csa_shift;
+    u32 csa_shift = cycles * 4;
+    u32 csa_masks = UINT32_C(0x08000400) >> csa_shift;
+    u32 csa_mask = (UINT32_C(1) << 27) >> csa_shift;
 
     // Optimized first iteration
     u32 carry = -(multiplier & 1) & ~multiplicand;
@@ -143,8 +141,8 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 }
 #elif USE_AVX2
 #include <immintrin.h>
-// Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
     // Calculate all scaled booth factors (divided by 2), normalized within 16 bits
     const __m256i factor_shuffle = _mm256_set_epi8(
         -1,-1,-1,-1,-1,-1,-1,-1,
@@ -155,9 +153,10 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 
     __m256i factors = _mm256_set1_epi32(multiplier);
     factors = _mm256_shuffle_epi8(factors, factor_shuffle);
-    factors = _mm256_sub_epi16(
-        _mm256_and_si256(factors, factor_mask),
-        _mm256_and_si256(_mm256_srli_epi16(factors, 1), factor_mask));
+    __m256i factors_low = _mm256_and_si256(factors, factor_mask);
+    __m256i factors_high = _mm256_and_si256(_mm256_srli_epi16(factors, 1), factor_mask);
+    factors = _mm256_sub_epi16(factors_low, factors_high);
+    __m256i factor_signs = _mm256_cmpgt_epi16(factors_high, factors_low);
 
     // Get the multiplicand (times 4) shifted relative to each booth factor
     const __m256i multiplicand_shuffle = _mm256_set_epi8(
@@ -172,17 +171,16 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     // Calculate the 16 most significant bits of every booth addend (times 2)
     __m256i addends = _mm256_mullo_epi16(factors, multiplicands);
     // Subtract 1 if the factor was negative to remove the injected carries
-    addends = _mm256_add_epi16(addends, _mm256_srai_epi16(factors, 15));
+    addends = _mm256_add_epi16(addends, factor_signs);
 
-    // Determine number of iterations and masks to apply to each iteration
+    // Determine masks to apply to each iteration
     // Each mask is shifted left by 1 to account for the extra factor of 2
     __m256i csa_masks = _mm256_set_epi16(
-        -(1 << 15), -(1 << 14), -(1 << 13), -(1 << 12),
-        -(1 << 11), -(1 << 10), -(1 << 9), -(1 << 8),
-        -(1 << 7), -(1 << 6), -(1 << 5), -(1 << 4),
-        -(1 << 3), -(1 << 2), -(1 << 1), -(1 << 0));
-    u32 csa_shift = _lzcnt_u32((multiplier ^ ((s32) multiplier >> 31)) | 1) >> 3;
-    csa_shift *= 4;
+        (1 << 15), (1 << 14), (1 << 13), (1 << 12),
+        (1 << 11), (1 << 10), (1 << 9), (1 << 8),
+        (1 << 7), (1 << 6), (1 << 5), (1 << 4),
+        (1 << 3), (1 << 2), (1 << 1), (1 << 0));
+    u32 csa_shift = (3 - cycles) * 4;
     csa_masks = _mm256_sll_epi16(csa_masks, _mm_cvtsi32_si128(csa_shift));
     u32 csa_mask = (UINT32_C(1) << 15) << csa_shift;
 
@@ -196,8 +194,8 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     carry &= csa_mask;
 
     // Mask and reduce the outputs and carries
-    __m256i outputs = _mm256_and_si256(addends, csa_masks);
-    __m256i carries = _mm256_and_si256(addends, _mm256_abs_epi16(csa_masks));
+    __m256i outputs = _mm256_and_si256(addends, _mm256_sub_epi16(_mm256_setzero_si256(), csa_masks));
+    __m256i carries = _mm256_and_si256(addends, csa_masks);
     // Pack output into the high 64 bits and carry into the low 64 bits of each 128-bit lane
     __m256i reduce = _mm256_hadd_epi16(carries, outputs);
     // Combine lanes
@@ -219,8 +217,8 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     return carry >> 31;
 }
 #else
-// Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
     // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
     multiplicand |= 1;
 
@@ -230,13 +228,9 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     // Pre-populate accumulator for output
     u32 output = accumulator;
 
-    // Determine number of iterations and bit to start at
-    u32 csa_mask = UINT32_C(0x80000000);
-    u32 temp = multiplier ^ ((s32)multiplier >> 31);
-    do {
-        csa_mask >>= 4;
-        temp >>= 8;
-    } while (temp != 0);
+    // Determine bit to start at
+    u32 csa_shift = cycles * 4;
+    u32 csa_mask = UINT32_C(0x08000000) >> csa_shift;
 
     // Add the bits relevant to carry bit 31
     output = (output & -csa_mask) + (carry & -csa_mask);
@@ -264,8 +258,9 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 }
 #endif
 #else
-// Takes a multiplier between -0x01000000 and 0x00FFFFFF
-static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator) {
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
+    (void)cycles;
     // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
     multiplicand |= 1;
 
@@ -408,11 +403,12 @@ static inline struct MultiplicationOutput booths_multiplication_opt(enum Multipl
 struct MultiplicationOutput mla_opt(s32 rm, s32 rs, u32 rn) {
 #if CARRY_ONLY
     u32 product = (u32) rm * (u32) rs + rn;
+    u32 cycles = (u32) (31 - __builtin_clz((rs ^ (rs >> 31)) | 1)) / 8;
     bool carry;
-    if (rs < -0x01000000 || rs >= 0x01000000) {
+    if (cycles >= 3) {
         carry = (rs >> 30) == -2;
     } else {
-        carry = booths_multiplication32_opt(rm, rs, rn);
+        carry = booths_multiplication32_opt(rm, rs, rn, cycles);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
@@ -427,11 +423,12 @@ struct MultiplicationOutput mul_opt(s32 rm, s32 rs) {
 struct MultiplicationOutput umlal_opt(u32 rdlo, u32 rdhi, u32 rm, u32 rs) {
 #if CARRY_ONLY
     u64 product = (u64) rm * (u64) rs + ((u64) rdhi << 32 | rdlo);
+    u32 cycles = (u32) (31 - __builtin_clz(rs | 1)) / 8;
     bool carry;
-    if (rs >= 0x01000000) {
+    if (cycles >= 3) {
         carry = booths_multiplication64_opt(rm >> 6, rs >> 26, rdhi);
     } else {
-        carry = booths_multiplication32_opt(rm, rs, rdlo);
+        carry = booths_multiplication32_opt(rm, rs, rdlo, cycles);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
@@ -446,11 +443,12 @@ struct MultiplicationOutput umull_opt(u32 rm, u32 rs) {
 struct MultiplicationOutput smlal_opt(u32 rdlo, u32 rdhi, s32 rm, s32 rs) {
 #if CARRY_ONLY
     u64 product = (u64) rm * (u64) rs + ((u64) rdhi << 32 | rdlo);
+    u32 cycles = (u32) (31 - __builtin_clz((rs ^ (rs >> 31)) | 1)) / 8;
     bool carry;
-    if (rs < -0x01000000 || rs >= 0x01000000) {
+    if (cycles >= 3) {
         carry = booths_multiplication64_opt(rm >> 6, rs >> 26, rdhi);
     } else {
-        carry = booths_multiplication32_opt(rm, rs, rdlo);
+        carry = booths_multiplication32_opt(rm, rs, rdlo, cycles);
     }
     return (struct MultiplicationOutput) { product, carry };
 #else
