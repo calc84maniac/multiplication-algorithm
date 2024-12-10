@@ -23,6 +23,44 @@
 #define USE_SWAR32 0
 #endif
 
+#if defined(__ARM_ARCH_4T__)
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
+    (void)cycles;
+    // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
+    multiplicand |= 1;
+
+    // Optimized first iteration
+    u32 booth = (s32)(multiplier << 31) >> 31;
+    u32 carry = booth & ~multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+
+    u32 sum = output + carry;
+    do {
+        #pragma GCC unroll 4
+        for (int shift = 0; shift < 8; shift += 2) {
+            // Get next booth factor (-2 to 2, shifted left by shift)
+            u32 next_booth = (s32)(multiplier << (29 - shift)) >> (30 - shift);
+            u32 factor = next_booth - booth;
+            booth = next_booth;
+            // Get scaled value of booth addend
+            u32 addend = multiplicand * factor;
+            // Combine the addend with the CSA
+            // Not performing any masking seems to work because the lower carries can't propagate to bit 31
+            output ^= carry ^ (addend << 1);
+            sum += addend << 1;
+            carry = sum - output;
+        }
+        // Adjust next iteration to use booth factors between -128 and 128
+        booth = (s32)booth >> 8;
+        multiplier = (s32)multiplier >> 8;
+        multiplicand <<= 8;
+    } while (multiplier != booth);
+
+    return carry >> 31;
+}
+#else
 #if CARRY_DIRECT
 #if USE_SWAR64
 // Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
@@ -290,6 +328,7 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
 
     return carry >> 31;
 }
+#endif
 #endif
 
 // Takes a multiplicand shifted right by 6 and a multiplier shifted right by 26 (zero or sign extended)
