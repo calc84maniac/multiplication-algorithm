@@ -11,8 +11,12 @@
 #define CARRY_DIRECT 1
 #endif
 
+#ifndef USE_SSE2
+#define USE_SSE2 __SSE2__
+#endif
+
 #ifndef USE_AVX2
-#define USE_AVX2 __AVX2__
+#define USE_AVX2 0
 #endif
 
 #ifndef USE_SWAR64
@@ -252,6 +256,94 @@ static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier,
     carry += reduce3 << 15;
     // Detect carry bit 31 of the final iteration
     carry = output ^ (output - carry);
+    return carry >> 31;
+}
+#elif USE_SSE2
+#include <immintrin.h>
+// Help the compiler interleave scalar and vector operations
+static inline void booth_iter(u32 multiplicand, u32 multiplier, u32* sum, u32* output, u32* carry, u32* booth, int shift)
+{
+    // Get next booth factor (-2 to 2, shifted left by 30-shift)
+    u32 next_booth = (s32)(multiplier << shift) >> shift;
+    u32 factor = next_booth - *booth;
+    *booth = next_booth;
+    // Get scaled value of booth addend
+    u32 addend = multiplicand * factor;
+    // Combine the addend with the CSA
+    // Not performing any masking seems to work because the lower carries can't propagate to bit 31
+    *output ^= *carry ^ addend;
+    *sum += addend;
+    *carry = *sum - *output;
+}
+
+// Takes a multiplier between -0x01000000 and 0x00FFFFFF, cycles between 0 and 2
+static inline bool booths_multiplication32_opt(u32 multiplicand, u32 multiplier, u32 accumulator, u32 cycles) {
+    // Set the low bit of the multiplicand to cause negation to invert the upper bits, this bit can't propagate to bit 31
+    multiplicand |= 1;
+
+    // Optimized initial iteration
+    u32 booth = (s32)(multiplier << 31) >> 31;
+    u32 carry = booth & ~multiplicand;
+    // Pre-populate accumulator for output
+    u32 output = accumulator;
+    u32 sum = output + carry;
+
+    // Calculate the last 8 scaled booth factors, normalized within 16 bits
+    const __m128i factor_mask = _mm_set_epi16(
+        (3 << 7), (3 << 7), (3 << 5), (3 << 5),
+        (3 << 3), (3 << 3), (3 << 1), (3 << 1));
+
+    u32 packed_multiplier = (multiplier & UINT32_C(0xFFFF0000)) | ((multiplier >> 8) & UINT32_C(0x0000FFFF));
+    __m128i factors = _mm_set1_epi32(packed_multiplier);
+    __m128i factors_low = _mm_and_si128(_mm_slli_epi16(factors, 1), factor_mask);
+    __m128i factors_high = _mm_and_si128(factors, factor_mask);
+    factors = _mm_sub_epi16(factors_low, factors_high);
+
+    // First iteration
+    booth_iter(multiplicand, multiplier, &sum, &output, &carry, &booth, 29);
+
+    // Get the multiplicand shifted relative to each booth factor, times 2
+    u32 packed_multiplicand = (multiplicand << 17) | ((multiplicand >> 7 | 1) & UINT32_C(0x0000FFFF));
+    __m128i multiplicands = _mm_set1_epi32(packed_multiplicand);
+
+    // Second iteration
+    booth_iter(multiplicand, multiplier, &sum, &output, &carry, &booth, 27);
+
+    // Calculate bits 23-30 of the last 8 booth addends
+    __m128i addends = _mm_mullo_epi16(factors, multiplicands);
+    addends = _mm_srli_epi16(addends, 8);
+
+    // Third iteration
+    booth_iter(multiplicand, multiplier, &sum, &output, &carry, &booth, 25);
+
+    // Determine masks to apply to each 8-bit addend slice
+    __m128i csa_masks = _mm_set_epi16(
+        -(1 << 7), -(1 << 3), -(1 << 6), -(1 << 2), -(1 << 5), -(1 << 1), -(1 << 4), -(1 << 0));
+    u32 csa_shift = (2 - cycles) * 4;
+    csa_masks = _mm_sll_epi16(csa_masks, _mm_cvtsi32_si128(csa_shift));
+    u32 csa_mask = -(UINT32_C(1) << 23) << csa_shift;
+
+    // Fourth iteration
+    booth_iter(multiplicand, multiplier, &sum, &output, &carry, &booth, 23);
+
+    // Add the bits relevant to carry bit 31
+    sum = output + (carry & csa_mask);
+    output += (carry & (csa_mask << 1));
+
+    // Mask the sums and the outputs
+    __m128i sums = _mm_and_si128(addends, csa_masks);
+    __m128i outputs = _mm_and_si128(addends, _mm_slli_epi16(csa_masks, 1));
+
+    // Pack the sums into the top 64 bits and the outputs into the bottom 64 bits
+    __m128i reduce = _mm_packus_epi16(outputs, sums);
+    // Reduce each group into a single sum
+    reduce = _mm_sad_epu8(reduce, _mm_setzero_si128());
+    // Combine with the initial scalar sum and output, shifting back up to bits 23-30
+    sum += _mm_extract_epi16(reduce, 4) << 23;
+    output += _mm_cvtsi128_si32(reduce) << 23;
+
+    // Detect carry bit 31 of the final iteration
+    carry = sum ^ output;
     return carry >> 31;
 }
 #else
